@@ -29,7 +29,7 @@ const SPREADSHEET_ID = process.env.SPREADSHEET_ID;
 
 if (!SPREADSHEET_ID) {
     console.error("⚠️ ERROR CRÍTICO: No se ha definido la variable de entorno SPREADSHEET_ID.");
-	process.exit(1);
+    process.exit(1);
 }
 
 let auth;
@@ -63,7 +63,6 @@ const limpiarId = (id) => (id ? String(id).replace(/'/g, "").trim() : "");
 // ==========================================
 app.post('/api/kiosk', async (req, res) => {
     try {
-        // Como eliminamos el soporte a texto plano, asumimos que llega el body en JSON correctamente.
         const data = req.body;
         
         if (!data || !data.accion) {
@@ -134,6 +133,29 @@ app.post('/api/kiosk', async (req, res) => {
             }
             return res.json({ status: "ok" });
         }
+        
+        // REGISTRO DE EVENTOS (MODO ESPECTADOR)
+        if (accion === 'registrar_evento') {
+            const dAhora = dayjs().tz(TZ);
+            const fIngreso = dAhora.format('DD/MM/YYYY HH:mm:ss');
+            
+            await sheets.spreadsheets.values.append({
+                spreadsheetId: SPREADSHEET_ID, range: 'Eventos!A:I', 
+                valueInputOption: 'USER_ENTERED', insertDataOption: 'INSERT_ROWS',
+                requestBody: { values: [[
+                    data.evento, 
+                    fIngreso, 
+                    `'${data.id}`, 
+                    data.nombre, 
+                    data.edad, 
+                    data.sector, 
+                    data.rol, 
+                    data.correo, 
+                    `'${data.telefono}` 
+                ]] }
+            });
+            return res.json({ status: "ok" });
+        }
 
         // REGISTRAR ENTRADA
         if (accion === 'entrada') {
@@ -168,6 +190,44 @@ app.post('/api/kiosk', async (req, res) => {
                 spreadsheetId: SPREADSHEET_ID, range: 'Registros!A:L', 
                 valueInputOption: 'USER_ENTERED', insertDataOption: 'INSERT_ROWS',
                 requestBody: { values: [[ fIngreso, `'${usuarioId}`, data.nombre, data.area, data.rol, data.laboratorio, data.actividad, hIngreso, hSalidaEstimadaStr, "Previsto", ipCliente, "" ]] }
+            });
+
+            return res.json({ status: "ok" });
+        }
+
+        // 💡 REGISTRAR SALIDA RETROACTIVA (Olvidó marcar entrada)
+        if (accion === 'salida_retroactiva') {
+            if (data.esNuevo) {
+                await sheets.spreadsheets.values.append({
+                    spreadsheetId: SPREADSHEET_ID, range: 'Usuarios!A:D', 
+                    valueInputOption: 'USER_ENTERED', insertDataOption: 'INSERT_ROWS',
+                    requestBody: { values: [[`'${usuarioId}`, data.nombre, data.area, data.rol]] }
+                });
+            } else if (data.actualizarUsuario) {
+                const resUsr = await sheets.spreadsheets.values.get({ spreadsheetId: SPREADSHEET_ID, range: 'Usuarios!A:A' });
+                const ids = resUsr.data.values || [];
+                const rowIndex = ids.findIndex(row => row && limpiarId(row[0]) === usuarioId);
+                
+                if (rowIndex > 0) {
+                    await sheets.spreadsheets.values.update({
+                        spreadsheetId: SPREADSHEET_ID, range: `Usuarios!B${rowIndex + 1}:D${rowIndex + 1}`, valueInputOption: 'USER_ENTERED',
+                        requestBody: { values: [[data.nombre, data.area, data.rol]] }
+                    });
+                }
+            }
+
+            const dAhora = dayjs().tz(TZ);
+            const fHoyStr = dAhora.format('DD/MM/YYYY');
+            const hSalidaReal = dAhora.format('HH:mm:ss');
+            
+            const partesTiempo = (data.tiempoPasado || "02:00").split(':');
+            const dIngresoCalculado = dAhora.subtract(parseInt(partesTiempo[0]), 'hour').subtract(parseInt(partesTiempo[1]), 'minute');
+            const hIngresoStr = dIngresoCalculado.format('HH:mm:ss');
+
+            await sheets.spreadsheets.values.append({
+                spreadsheetId: SPREADSHEET_ID, range: 'Registros!A:L', 
+                valueInputOption: 'USER_ENTERED', insertDataOption: 'INSERT_ROWS',
+                requestBody: { values: [[ fHoyStr, `'${usuarioId}`, data.nombre, data.area, data.rol, data.laboratorio, data.actividad, hIngresoStr, hSalidaReal, "Confirmado", ipCliente, "" ]] }
             });
 
             return res.json({ status: "ok" });
